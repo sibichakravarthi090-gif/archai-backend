@@ -1,116 +1,67 @@
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from enum import Enum
-from typing import Optional, Dict
+from fastapi import FastAPI, UploadFile, File
+import uuid
 import shutil
 import os
-import uuid
-import time
+import cv2
+import numpy as np
 
-app = FastAPI(title="ArchAI Backend", version="1.0")
+app = FastAPI()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+UPLOAD_FOLDER = "uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
-class ProcessingStatus(str, Enum):
-    processing = "processing"
-    completed = "completed"
-    failed = "failed"
+def extract_walls(image_path):
+
+    image = cv2.imread(image_path)
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    edges = cv2.Canny(gray, 50, 150)
+
+    lines = cv2.HoughLinesP(
+        edges,
+        1,
+        np.pi / 180,
+        threshold=100,
+        minLineLength=50,
+        maxLineGap=10
+    )
+
+    walls = []
+
+    if lines is not None:
+        for line in lines:
+            x1, y1, x2, y2 = line[0]
+
+            walls.append({
+                "x1": int(x1),
+                "y1": int(y1),
+                "x2": int(x2),
+                "y2": int(y2)
+            })
+
+    return walls
 
 
-class UploadResponse(BaseModel):
-    success: bool
-    file_id: str
-    message: str
+@app.post("/upload")
+async def upload_blueprint(file: UploadFile = File(...)):
 
+    file_id = str(uuid.uuid4())
 
-class StatusResponse(BaseModel):
-    status: ProcessingStatus
-    result: Optional[str] = None
+    file_path = f"{UPLOAD_FOLDER}/{file_id}.png"
 
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
 
-class InMemoryStorage:
-    def __init__(self):
-        self._data: Dict[str, StatusResponse] = {}
+    walls = extract_walls(file_path)
 
-    def create(self, file_id: str):
-        self._data[file_id] = StatusResponse(status=ProcessingStatus.processing)
-
-    def update(self, file_id: str, status: ProcessingStatus, result: Optional[str] = None):
-        self._data[file_id] = StatusResponse(status=status, result=result)
-
-    def get(self, file_id: str) -> StatusResponse:
-        if file_id not in self._data:
-            raise KeyError("File ID not found")
-        return self._data[file_id]
-
-
-storage = InMemoryStorage()
+    return {
+        "file_id": file_id,
+        "walls": walls
+    }
 
 
 @app.get("/")
-async def root():
-    return {"status": "ArchAI Backend Running"}
-
-
-@app.post("/upload", response_model=UploadResponse)
-async def upload_blueprint(
-    background_tasks: BackgroundTasks,
-    file: UploadFile = File(...)
-):
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="No file provided")
-
-    file_id = str(uuid.uuid4())
-    extension = file.filename.split(".")[-1]
-    saved_filename = f"{file_id}.{extension}"
-    file_path = os.path.join(UPLOAD_DIR, saved_filename)
-
-    try:
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-    except Exception:
-        raise HTTPException(status_code=500, detail="Failed to save file")
-
-    storage.create(file_id)
-    background_tasks.add_task(process_blueprint, file_id, file_path)
-
-    return UploadResponse(
-        success=True,
-        file_id=file_id,
-        message="Upload successful. Processing started."
-    )
-
-
-@app.get("/status/{file_id}", response_model=StatusResponse)
-async def check_status(file_id: str):
-    try:
-        return storage.get(file_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="Invalid file ID")
-
-
-def process_blueprint(file_id: str, file_path: str):
-    try:
-        time.sleep(8)
-
-        result_path = f"/models/{file_id}.glb"
-
-        storage.update(
-            file_id,
-            ProcessingStatus.completed,
-            result=result_path
-        )
-
-    except Exception:
-        storage.update(file_id, ProcessingStatus.failed)
+def root():
+    return {"message": "ArchAI Backend Running"}
