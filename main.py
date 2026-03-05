@@ -1,19 +1,13 @@
 from fastapi import FastAPI, UploadFile, File
-import uuid
-import shutil
-import os
 import cv2
 import numpy as np
+from PIL import Image
+import io
 
 app = FastAPI()
 
-UPLOAD_FOLDER = "uploads"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-
-def extract_walls(image_path):
-
-    image = cv2.imread(image_path)
+def detect_walls(image):
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
@@ -22,7 +16,7 @@ def extract_walls(image_path):
     lines = cv2.HoughLinesP(
         edges,
         1,
-        np.pi / 180,
+        np.pi/180,
         threshold=100,
         minLineLength=50,
         maxLineGap=10
@@ -35,33 +29,31 @@ def extract_walls(image_path):
             x1, y1, x2, y2 = line[0]
 
             walls.append({
-                "x1": int(x1),
-                "y1": int(y1),
-                "x2": int(x2),
-                "y2": int(y2)
+                "x1": float(x1/50),
+                "z1": float(y1/50),
+                "x2": float(x2/50),
+                "z2": float(y2/50)
             })
 
     return walls
 
 
+@app.get("/")
+def home():
+    return {"status": "server running"}
+
+
 @app.post("/upload")
-async def upload_blueprint(file: UploadFile = File(...)):
+async def upload(file: UploadFile = File(...)):
 
-    file_id = str(uuid.uuid4())
+    contents = await file.read()
 
-    file_path = f"{UPLOAD_FOLDER}/{file_id}.png"
+    image = Image.open(io.BytesIO(contents))
 
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    image = np.array(image)
 
-    walls = extract_walls(file_path)
+    walls = detect_walls(image)
 
     return {
-        "file_id": file_id,
         "walls": walls
     }
-
-
-@app.get("/")
-def root():
-    return {"message": "ArchAI Backend Running"}
