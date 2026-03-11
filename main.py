@@ -1,59 +1,80 @@
 from fastapi import FastAPI, UploadFile, File
+import uvicorn
+import os
 import cv2
 import numpy as np
-from PIL import Image
-import io
 
 app = FastAPI()
 
+UPLOAD_FOLDER = "uploads"
 
-def detect_walls(image):
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+def process_blueprint(image_path):
+
+    img = cv2.imread(image_path)
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
     edges = cv2.Canny(gray, 50, 150)
 
     lines = cv2.HoughLinesP(
         edges,
         1,
-        np.pi/180,
+        np.pi / 180,
         threshold=100,
-        minLineLength=50,
+        minLineLength=80,
         maxLineGap=10
     )
 
     walls = []
+    doors = []
 
     if lines is not None:
+
         for line in lines:
+
             x1, y1, x2, y2 = line[0]
 
-            walls.append({
-                "x1": float(x1/50),
-                "z1": float(y1/50),
-                "x2": float(x2/50),
-                "z2": float(y2/50)
-            })
+            length = np.sqrt((x2-x1)**2 + (y2-y1)**2)
 
-    return walls
+            if length > 100:
 
+                walls.append({
+                    "x1": int(x1),
+                    "y1": int(y1),
+                    "x2": int(x2),
+                    "y2": int(y2)
+                })
+
+            else:
+
+                doors.append({
+                    "x": int(x1),
+                    "y": int(y1),
+                    "width": 50
+                })
+
+    return {
+        "walls": walls,
+        "doors": doors
+    }
+
+@app.post("/upload")
+async def upload_blueprint(file: UploadFile = File(...)):
+
+    file_location = os.path.join(UPLOAD_FOLDER, file.filename)
+
+    with open(file_location, "wb") as f:
+        f.write(await file.read())
+
+    result = process_blueprint(file_location)
+
+    return result
 
 @app.get("/")
 def home():
-    return {"status": "server running"}
+    return {"message": "ArchAI Backend Running"}
 
-
-@app.post("/upload")
-async def upload(file: UploadFile = File(...)):
-
-    contents = await file.read()
-
-    image = Image.open(io.BytesIO(contents))
-
-    image = np.array(image)
-
-    walls = detect_walls(image)
-
-    return {
-        "walls": walls
-    }
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
